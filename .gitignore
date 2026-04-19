@@ -1,0 +1,40 @@
+__pycache__/
+venv*/
+.vscode/
+.idea/
+
+# Sensitive user data
+ssh_profiles.json
+ssh_tunnel_config.json
+backup/
+old/
+
+# Logs
+*.log
+
+# Compiled binary (Nuitka output)
+*.exe
+*.bin
+
+# Nuitka build artifacts
+build/
+dist/
+*.dist-info/
+*.onefile-build/
+nuitka-build/
+
+# Nuitka build script (local paths)
+Nuitka.md
+
+# Python bytecode
+*.pyc
+*.pyo
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db

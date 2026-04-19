@@ -1,0 +1,12 @@
+# Core SSH
+paramiko>=3.0.0
+PySocks>=1.7.1
+
+# Encryption
+cryptography>=41.0.0
+
+# UI
+PyQt6>=6.4.0
+
+# Optional: secure master-password storage
+# keyring>=24.0.0
