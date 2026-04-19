@@ -349,7 +349,7 @@ class MainWindow(QMainWindow):
         if not self._config.get('log_file_enabled') or not self._config.get('log_file_path'):
             return
 
-        level   = getattr(logging, self._config.get('log_level', 'DEBUG'), logging.DEBUG)
+        level   = getattr(logging, self._config.get('log_level', 'INFO'), logging.INFO)
         max_b   = self._config.get('log_max_mb', 10) * 1024 * 1024
         backups = self._config.get('log_backups', 3)
         try:
@@ -1402,7 +1402,8 @@ class MainWindow(QMainWindow):
                 self._profile_errors.pop(prof_name, None)
                 self._reconnect_attempts.pop(prof_name, None)
             except Exception as exc:
-                LOGGER.exception('Failed to start %s', prof_name)
+                LOGGER.error('Failed to start %s: %s', prof_name, exc)
+                LOGGER.debug('Failed to start %s', prof_name, exc_info=True)
                 if _is_reconnect:
                     attempts = self._reconnect_attempts.get(prof_name, 0) + 1
                     self._reconnect_attempts[prof_name] = attempts
@@ -1432,8 +1433,9 @@ class MainWindow(QMainWindow):
                 try:
                     self.manager.close_instance(info['id'])
                     LOGGER.info('Stopped %s', prof_name)
-                except Exception:
-                    LOGGER.exception('Failed to stop %s', prof_name)
+                except Exception as exc:
+                    LOGGER.error('Failed to stop %s: %s', prof_name, exc)
+                    LOGGER.debug('Failed to stop %s', prof_name, exc_info=True)
         if _repopulate:
             self._repopulate_tree()
 
@@ -1458,7 +1460,8 @@ class MainWindow(QMainWindow):
                     config = self._make_tunnel_config(name, cfg)
                     self.manager.create_tunnel(config)
                 except Exception as exc:
-                    LOGGER.exception('Failed to start %s', name)
+                    LOGGER.error('Failed to start %s: %s', name, exc)
+                    LOGGER.debug('Failed to start %s', name, exc_info=True)
                     self._profile_errors[name] = str(exc)
             self._refresh_requested.emit()
 
@@ -1485,8 +1488,9 @@ class MainWindow(QMainWindow):
                         try:
                             self.manager.close_instance(info['id'])
                             LOGGER.info('Stopped %s', name)
-                        except Exception:
-                            LOGGER.exception('Failed to stop %s', name)
+                        except Exception as exc:
+                            LOGGER.error('Failed to stop %s: %s', name, exc)
+                            LOGGER.debug('Failed to stop %s', name, exc_info=True)
             self._refresh_requested.emit()
 
         threading.Thread(target=worker, daemon=True).start()

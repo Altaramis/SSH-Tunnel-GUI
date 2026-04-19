@@ -597,8 +597,8 @@ class LogFileDialog(QDialog):
         if initial:
             self._enabled.setChecked(initial.get('log_file_enabled', False))
             self._path.setText(initial.get('log_file_path', ''))
-            lvl = initial.get('log_level', 'DEBUG')
-            idx = self.LEVELS.index(lvl) if lvl in self.LEVELS else 0
+            lvl = initial.get('log_level', 'INFO')
+            idx = self.LEVELS.index(lvl) if lvl in self.LEVELS else 1
             self._level.setCurrentIndex(idx)
             self._max_mb.setValue(initial.get('log_max_mb', 10))
             self._backups.setValue(initial.get('log_backups', 3))

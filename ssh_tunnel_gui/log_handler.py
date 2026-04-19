@@ -31,9 +31,10 @@ def make_log_buffer() -> Deque[str]:
 def attach_buffer(buffer: Deque[str]) -> BufferingLogHandler:
     """Attach a BufferingLogHandler to the two application loggers and return it."""
     handler = BufferingLogHandler(buffer)
+    handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     for name in ('ssh_tunnel_lib', 'ssh_tunnel_table'):
         lg = logging.getLogger(name)
         lg.addHandler(handler)
-        lg.setLevel(logging.INFO)
+        lg.setLevel(logging.DEBUG)
     return handler

@@ -71,8 +71,8 @@ def _relay(src: Any, dst: Any) -> None:
                 if not data:
                     break
                 src.sendall(data)
-    except Exception:
-        logger.exception("Relay error")
+    except Exception as exc:
+        logger.debug("Relay error: %s", exc, exc_info=True)
     finally:
         for s in peers:
             try:
@@ -111,8 +111,9 @@ class _ForwardTCPHandler(socketserver.BaseRequestHandler):
                 self.request.getpeername(),
                 timeout=10.0,
             )
-        except Exception:
-            logger.exception("Failed to open SSH channel")
+        except Exception as exc:
+            logger.error("Failed to open SSH channel: %s", exc)
+            logger.debug("Failed to open SSH channel", exc_info=True)
             return
         if chan is None:
             logger.warning("open_channel returned None")
@@ -178,8 +179,9 @@ class _Socks5Handler(socketserver.StreamRequestHandler):
 
             _socks5_reply(conn, 0x00)
             _relay(conn, chan)
-        except Exception:
-            logger.exception("SOCKS5 handler error")
+        except Exception as exc:
+            logger.error("SOCKS5 handler error: %s", exc)
+            logger.debug("SOCKS5 handler error", exc_info=True)
 
 
 # ------------------------------------------------------------------
@@ -217,11 +219,12 @@ class _RemoteChannelAcceptor:
             sock = socket.create_connection(
                 (self._target_host, self._target_port), timeout=10.0,
             )
-        except Exception:
-            logger.exception(
-                "Remote relay: cannot reach %s:%d",
-                self._target_host, self._target_port,
+        except Exception as exc:
+            logger.error(
+                "Remote relay: cannot reach %s:%d: %s",
+                self._target_host, self._target_port, exc,
             )
+            logger.debug("Remote relay error", exc_info=True)
             chan.close()
             return
         _relay(chan, sock)
