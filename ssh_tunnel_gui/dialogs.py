@@ -114,7 +114,8 @@ class TunnelConfigDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None,
                  initial: Optional[Dict[str, Any]] = None,
                  name: Optional[str] = None,
-                 has_parent: bool = False) -> None:
+                 has_parent: bool = False,
+                 locked: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle('Edit tunnel' if initial else 'Add tunnel')
         self.setModal(True)
@@ -122,6 +123,13 @@ class TunnelConfigDialog(QDialog):
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 12, 12, 8)
+
+        if locked:
+            notice = QLabel('⚠ Tunnel is running — only name and lifecycle settings can be changed.')
+            notice.setWordWrap(True)
+            notice.setStyleSheet('color: #b8860b; padding: 4px 0;')
+            main_layout.addWidget(notice)
+
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         main_layout.addLayout(form)
@@ -228,6 +236,10 @@ class TunnelConfigDialog(QDialog):
         main_layout.addWidget(btns)
 
         self._on_type_changed()  # Set initial visibility
+
+        if locked:
+            for widget in (ssh_box, auth_box, fwd_box, proxy_box, self._keepalive):
+                widget.setEnabled(False)
 
         # ---- Pre-fill from initial ----
         if initial:

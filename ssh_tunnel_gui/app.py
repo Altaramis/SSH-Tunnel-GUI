@@ -241,8 +241,14 @@ class _TunnelTree(QTreeWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setAutoScroll(True)
         self.setAutoScrollMargin(40)
+        self._is_running_fn = lambda _name: False
 
     def startDrag(self, supported_actions) -> None:
+        item = self.currentItem()
+        if item:
+            name = item.data(0, Qt.ItemDataRole.UserRole)
+            if name and self._is_running_fn(name):
+                return
         _TunnelTree.is_dragging = True
         super().startDrag(supported_actions)
         _TunnelTree.is_dragging = False
@@ -520,6 +526,7 @@ class MainWindow(QMainWindow):
         vbox.setSpacing(4)
 
         self.tree = _TunnelTree()
+        self.tree._is_running_fn = self._is_profile_running
         self.tree.setHeader(_ActionHeaderView(Qt.Orientation.Horizontal, self.tree))
         self.tree.setHeaderLabels(_COL_HEADERS)
         self.tree.setColumnCount(len(_COL_HEADERS))
@@ -1084,21 +1091,33 @@ class MainWindow(QMainWindow):
         cfg = self.profiles.get(prof_name)
         if cfg is None:
             return
+        is_running = self._is_profile_running(prof_name)
         dlg = TunnelConfigDialog(self, initial=cfg.copy(), name=prof_name,
-                                 has_parent=bool(cfg.get('parent')))
+                                 has_parent=bool(cfg.get('parent')),
+                                 locked=is_running)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             r = dlg.result_dict
             new_name = r.get('name') or prof_name
-            r.setdefault('parent', cfg.get('parent'))
-            r.setdefault('start_order', cfg.get('start_order', 999))
-            if new_name != prof_name:
-                # Update children that reference old name
-                for c in self.profiles.values():
-                    if c.get('parent') == prof_name:
-                        c['parent'] = new_name
-                self.profiles.pop(prof_name, None)
-            self.profiles[new_name] = r
-            self._sync_all_child_proxies()
+            if is_running:
+                # Only update safe fields — keep connection parameters untouched
+                cfg['auto_start']    = r['auto_start']
+                cfg['auto_reconnect'] = r['auto_reconnect']
+                if new_name != prof_name:
+                    for c in self.profiles.values():
+                        if c.get('parent') == prof_name:
+                            c['parent'] = new_name
+                    self.profiles[new_name] = self.profiles.pop(prof_name)
+                    self.manager.rename_instance(prof_name, new_name)
+            else:
+                r.setdefault('parent', cfg.get('parent'))
+                r.setdefault('start_order', cfg.get('start_order', 999))
+                if new_name != prof_name:
+                    for c in self.profiles.values():
+                        if c.get('parent') == prof_name:
+                            c['parent'] = new_name
+                    self.profiles.pop(prof_name, None)
+                self.profiles[new_name] = r
+                self._sync_all_child_proxies()
             self._save_profiles()
             self._repopulate_tree()
 

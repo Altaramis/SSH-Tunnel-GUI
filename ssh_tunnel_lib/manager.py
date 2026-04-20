@@ -90,6 +90,13 @@ class SSHManager:
             snapshot = list(self._instances.values())
         return [inst.info() for inst in snapshot]
 
+    def rename_instance(self, old_name: str, new_name: str) -> None:
+        with self._lock:
+            for inst in self._instances.values():
+                if inst.name == old_name:
+                    inst.name = new_name
+                    return
+
     def stop_all(self) -> None:
         with self._lock:
             ids = list(self._instances.keys())
