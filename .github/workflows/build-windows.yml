@@ -1,6 +1,5 @@
 name: Build Windows Executable (Nuitka)
 
-# Permet de lancer le workflow manuellement
 on:
   workflow_dispatch:
 
@@ -16,7 +15,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: 'pip' # Optimise les lancements futurs
 
       - name: Installer les dépendances
         run: |
@@ -26,7 +24,17 @@ jobs:
 
       - name: Compiler avec Nuitka
         run: |
-          python -m nuitka --onefile --remove-output --standalone --enable-plugin=pyqt6 --windows-console-mode=disable --windows-icon-from-ico=logo.ico --include-data-files=logo.ico=logo.ico ./ssh_tunnel.py
+          python -m nuitka `
+            --onefile `
+            --onefile-no-compression `
+            --remove-output `
+            --standalone `
+            --enable-plugin=pyqt6 `
+            --windows-console-mode=disable `
+            --windows-icon-from-ico=logo.ico `
+            --include-data-files=logo.ico=logo.ico `
+            --assume-yes-for-downloads `
+            ./ssh_tunnel.py
 
       - name: Télécharger l'exécutable
         uses: actions/upload-artifact@v4
