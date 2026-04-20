@@ -12,6 +12,35 @@ from ssh_tunnel_lib.tunnel_config import TunnelConfig
 
 logger = logging.getLogger('ssh_tunnel_lib')
 
+_KEY_CLASSES = (
+    paramiko.RSAKey,
+    paramiko.ECDSAKey,
+    paramiko.Ed25519Key,
+)
+
+
+def _load_private_key(
+    filename: str, passphrase: Optional[str]
+) -> paramiko.PKey:
+    """Try each key class in order; raise on failure."""
+    last_exc: Optional[Exception] = None
+    for klass in _KEY_CLASSES:
+        try:
+            return klass.from_private_key_file(filename, password=passphrase)
+        except paramiko.ssh_exception.PasswordRequiredException:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            continue
+    detail = str(last_exc) if last_exc else "unsupported format"
+    if passphrase is not None:
+        raise paramiko.ssh_exception.SSHException(
+            f"Could not load key file {filename!r}: wrong passphrase or unsupported format ({detail})"
+        )
+    raise paramiko.ssh_exception.SSHException(
+        f"Could not load key file {filename!r}: {detail}"
+    )
+
 
 class SSHConnection:
     """Wraps a paramiko SSHClient; exposes transport and connection-state helpers."""
@@ -29,18 +58,14 @@ class SSHConnection:
 
         pkey: Optional[paramiko.PKey] = None
         if config.key_filename:
-            try:
-                pkey = paramiko.PKey.from_private_key_file(
-                    config.key_filename, password=config.passphrase,
-                )
-            except Exception:
-                logger.warning("Could not load key file %r", config.key_filename)
+            pkey = _load_private_key(config.key_filename, config.passphrase)
 
         client.connect(
             config.hostname, config.port, config.username,
             password=config.password,
             pkey=pkey,
-            key_filename=None if pkey else config.key_filename,
+            key_filename=None,
+            passphrase=config.passphrase,
             timeout=timeout,
             sock=sock,
             allow_agent=config.allow_agent,
