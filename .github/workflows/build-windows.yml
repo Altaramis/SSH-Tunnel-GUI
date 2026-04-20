@@ -1,0 +1,35 @@
+name: Build Windows Executable (Nuitka)
+
+# Permet de lancer le workflow manuellement
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Récupérer le code source
+        uses: actions/checkout@v4
+
+      - name: Configurer Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip' # Optimise les lancements futurs
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade wheel setuptools nuitka
+          pip install -r requirements.txt
+
+      - name: Compiler avec Nuitka
+        run: |
+          python -m nuitka --onefile --remove-output --standalone --enable-plugin=pyqt6 --windows-console-mode=disable --windows-icon-from-ico=logo.ico --include-data-files=logo.ico=logo.ico ./ssh_tunnel.py
+
+      - name: Télécharger l'exécutable
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh_tunnel_windows
+          path: ssh_tunnel.exe
