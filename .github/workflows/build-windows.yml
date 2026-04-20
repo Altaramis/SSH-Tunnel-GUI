@@ -1,11 +1,16 @@
-name: Build Windows Executable (Nuitka)
+name: Build and Release Windows Executable
 
 on:
-  workflow_dispatch:
+  release:
+    types: [published] # Se déclenche quand on créer une release
+  workflow_dispatch: # Permet toujours de le lancer manuellement
 
 jobs:
   build:
     runs-on: windows-latest
+    # donne la permission à l'action d'ajouter des fichiers à la release
+    permissions:
+      contents: write
 
     steps:
       - name: Récupérer le code source
@@ -36,8 +41,9 @@ jobs:
             --assume-yes-for-downloads `
             ./ssh_tunnel.py
 
-      - name: Télécharger l'exécutable
-        uses: actions/upload-artifact@v4
+      - name: Ajouter l'exécutable à la Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ssh_tunnel_windows
-          path: ssh_tunnel.exe
+          files: ssh_tunnel.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
