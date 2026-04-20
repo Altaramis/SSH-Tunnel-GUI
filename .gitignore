@@ -38,3 +38,6 @@ Nuitka.md
 # OS
 .DS_Store
 Thumbs.db
+
+# Local release notes
+releases/
