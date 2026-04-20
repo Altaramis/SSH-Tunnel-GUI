@@ -4,6 +4,7 @@
 
 from typing import Any, Dict, List, Optional
 
+import paramiko
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ssh_tunnel_gui.encryption import KEYRING_AVAILABLE
+from ssh_tunnel_lib.connection import _load_private_key
 
 
 class MasterPasswordDialog(QDialog):
@@ -165,10 +167,21 @@ class TunnelConfigDialog(QDialog):
         key_row = QWidget(); key_hl = QHBoxLayout(key_row); key_hl.setContentsMargins(0,0,0,0)
         key_hl.addWidget(self._keyfile); key_hl.addWidget(browse_btn)
         self._passphrase = QLineEdit(); self._passphrase.setEchoMode(QLineEdit.EchoMode.Password)
+        self._verify_btn = QPushButton('Verify'); self._verify_btn.setFixedWidth(60)
+        self._verify_btn.setEnabled(False)
+        self._verify_lbl = QLabel()
+        self._verify_btn.clicked.connect(self._verify_passphrase)
+        self._keyfile.textChanged.connect(
+            lambda t: self._verify_btn.setEnabled(bool(t.strip())))
+        passph_row = QWidget()
+        passph_hl = QHBoxLayout(passph_row); passph_hl.setContentsMargins(0, 0, 0, 0)
+        passph_hl.addWidget(self._passphrase)
+        passph_hl.addWidget(self._verify_btn)
+        passph_hl.addWidget(self._verify_lbl)
         auth_form.addRow(self._use_agent)
         auth_form.addRow('Password:', self._password)
         auth_form.addRow('Key file:', key_row)
-        auth_form.addRow('Passphrase:', self._passphrase)
+        auth_form.addRow('Passphrase:', passph_row)
         main_layout.addWidget(auth_box)
 
         # ---- Forwarding type ----
@@ -279,6 +292,20 @@ class TunnelConfigDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(self, 'Select private key')
         if path:
             self._keyfile.setText(path)
+
+    def _verify_passphrase(self) -> None:
+        keyfile = self._keyfile.text().strip()
+        passphrase = self._passphrase.text() or None
+        try:
+            _load_private_key(keyfile, passphrase)
+            self._verify_lbl.setText('✓ OK')
+            self._verify_lbl.setStyleSheet('color: green;')
+        except paramiko.ssh_exception.PasswordRequiredException:
+            self._verify_lbl.setText('✗ passphrase required')
+            self._verify_lbl.setStyleSheet('color: red;')
+        except Exception as exc:
+            self._verify_lbl.setText(f'✗ {exc}')
+            self._verify_lbl.setStyleSheet('color: red;')
 
     def _on_type_changed(self) -> None:
         show = self._rb_local.isChecked() or self._rb_remote.isChecked()

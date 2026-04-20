@@ -23,7 +23,10 @@ from PyQt6.QtWidgets import (
 
 from cryptography.fernet import InvalidToken
 
+import paramiko
+
 from ssh_tunnel_lib import SSHManager, TunnelConfig
+from ssh_tunnel_lib.connection import _load_private_key
 from ssh_tunnel_gui.encryption import EncryptionManager
 from ssh_tunnel_gui.log_handler import LOG_FORMAT, attach_buffer, make_log_buffer
 from ssh_tunnel_gui.dialogs import (
@@ -1408,10 +1411,37 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ Start / Stop
 
+    def _ensure_passphrase(self, prof_name: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """If the key file needs a passphrase not yet stored, prompt the user. Returns None on cancel."""
+        keyfile = cfg.get('keyfile')
+        if not keyfile or cfg.get('passphrase'):
+            return cfg
+        try:
+            _load_private_key(keyfile, None)
+            return cfg  # key loads without passphrase
+        except paramiko.ssh_exception.PasswordRequiredException:
+            pass
+        except Exception:
+            return cfg  # other error — let the connect step surface it
+        pwd, ok = QInputDialog.getText(
+            self, 'Passphrase required',
+            f'Enter passphrase for key:\n{keyfile}',
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return None
+        cfg = cfg.copy()
+        cfg['passphrase'] = pwd or None
+        return cfg
+
     def _start_profile(self, prof_name: str, _is_reconnect: bool = False) -> None:
         cfg = self.profiles.get(prof_name)
         if not cfg:
             return
+        if not _is_reconnect:
+            cfg = self._ensure_passphrase(prof_name, cfg)
+            if cfg is None:
+                return
 
         def worker() -> None:
             try:
