@@ -12,13 +12,13 @@ import time
 from typing import Any, Deque, Dict, List, Optional
 
 from PyQt6.QtCore import QPoint, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QCursor, QPalette, QPen, QPolygon
+from PyQt6.QtGui import QAction, QBrush, QColor, QCursor, QIcon, QPalette, QPen, QPolygon
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFileDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProxyStyle,
-    QPushButton, QStatusBar, QStyle, QStyledItemDelegate, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QStatusBar, QStyle, QStyledItemDelegate, QSystemTrayIcon,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from cryptography.fernet import InvalidToken
@@ -293,6 +293,7 @@ class MainWindow(QMainWindow):
     """Primary application window."""
 
     _refresh_requested = pyqtSignal()
+    _tray_message      = pyqtSignal(str, str)  # title, body — safe to emit from threads
 
     def __init__(self) -> None:
         super().__init__()
@@ -322,7 +323,9 @@ class MainWindow(QMainWindow):
         self._log_window: Optional[QWidget] = None
 
         self._last_state_hash: Optional[tuple] = None
+        self._tray_minimize_notified = False
         self._refresh_requested.connect(self._repopulate_tree)
+        self._tray_message.connect(self._show_tray_notification)
 
         self._config: Dict[str, Any] = {}
         self._file_log_handler: Optional[logging.Handler] = None
@@ -331,6 +334,8 @@ class MainWindow(QMainWindow):
 
         self._load_salt_from_file()
         self._show_master_pwd_dialog()
+
+        self._force_quit = False
 
         if self.master_pwd_ok:
             self._load_profiles()
@@ -343,6 +348,7 @@ class MainWindow(QMainWindow):
             self._timer = QTimer(self)
             self._timer.timeout.connect(self._on_timer)
             self._timer.start(1000)
+            self._build_tray()
         else:
             self._build_locked_ui()
 
@@ -611,6 +617,7 @@ class MainWindow(QMainWindow):
         hbox.addWidget(_btn('Logs',              self._toggle_logs_window))
         hbox.addWidget(_btn('Log to file',       self._configure_log_file))
         hbox.addWidget(_btn('Change Master Pwd', self._change_master_password))
+        hbox.addWidget(_btn('Quit',              self._quit_app))
         vbox.addWidget(btn_bar)
 
         self._status = QStatusBar()
@@ -652,7 +659,93 @@ class MainWindow(QMainWindow):
             self._update_tree_style()
             self._repopulate_tree()
 
+    # ------------------------------------------------------------------ System tray
+
+    def _build_tray(self) -> None:
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logo.ico')
+        icon = QIcon(icon_path) if os.path.exists(icon_path) else self.style().standardIcon(
+            QStyle.StandardPixmap.SP_ComputerIcon)
+
+        self._tray = QSystemTrayIcon(icon, self)
+
+        menu = QMenu()
+        restore_act = QAction('Restore', self)
+        restore_act.triggered.connect(self._restore_window)
+        menu.addAction(restore_act)
+        menu.addSeparator()
+        start_act = QAction('Start all', self)
+        start_act.triggered.connect(self._start_all_profiles)
+        menu.addAction(start_act)
+        stop_act = QAction('Stop all', self)
+        stop_act.triggered.connect(self._stop_all)
+        menu.addAction(stop_act)
+        menu.addSeparator()
+        quit_act = QAction('Quit', self)
+        quit_act.triggered.connect(self._quit_app)
+        menu.addAction(quit_act)
+
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._update_tray_tooltip()
+        self._tray.show()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._restore_window()
+
+    def _restore_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_app(self) -> None:
+        if hasattr(self, '_timer'):
+            self._timer.stop()
+        self._reconnect_pending.clear()
+        self._reconnect_attempts.clear()
+        try:
+            self.manager.stop_all()
+        except Exception:
+            LOGGER.exception('Error stopping tunnels on quit')
+        if self._log_window is not None:
+            self._log_window.close()
+        if hasattr(self, '_tray'):
+            self._tray.hide()
+        QApplication.instance().quit()
+
+    def _show_tray_notification(self, title: str, body: str) -> None:
+        if hasattr(self, '_tray') and self._tray.isVisible():
+            self._tray.showMessage(title, body,
+                                   QSystemTrayIcon.MessageIcon.Information, 4000)
+
+    def _update_tray_tooltip(self) -> None:
+        if not hasattr(self, '_tray'):
+            return
+        instances = self.manager.list_instances()
+        running = sum(1 for i in instances if i.get('transport_active', False))
+        total   = len(instances)
+        if total == 0:
+            tip = 'SSH Tunnels — no active connections'
+        elif running == total:
+            tip = f'SSH Tunnels — {running} connection(s) running'
+        else:
+            tip = f'SSH Tunnels — {running}/{total} connection(s) running'
+        self._tray.setToolTip(tip)
+
     def closeEvent(self, event) -> None:
+        if getattr(self, '_force_quit', False):
+            super().closeEvent(event)
+            return
+        if hasattr(self, '_tray') and self._tray.isVisible():
+            event.ignore()
+            self.hide()
+            if not self._tray_minimize_notified:
+                self._tray_minimize_notified = True
+                self._show_tray_notification(
+                    'SSH Tunnels',
+                    'Application minimized to system tray.\n'
+                    'Double-click the icon to restore.')
+            return
         if self._log_window is not None:
             self._log_window.close()
         super().closeEvent(event)
@@ -1499,6 +1592,8 @@ class MainWindow(QMainWindow):
         cfg = self.profiles.get(prof_name)
         if not cfg:
             return
+        if not _is_reconnect and self._is_profile_running(prof_name):
+            return
         if not _is_reconnect:
             cfg = self._ensure_passphrase(prof_name, cfg)
             if cfg is None:
@@ -1511,6 +1606,8 @@ class MainWindow(QMainWindow):
                 self.manager.create_tunnel(config)
                 self._profile_errors.pop(prof_name, None)
                 self._reconnect_attempts.pop(prof_name, None)
+                if _is_reconnect:
+                    self._tray_message.emit('Tunnel reconnected', f'"{prof_name}" is back online.')
             except Exception as exc:
                 LOGGER.error('Failed to start %s: %s', prof_name, exc)
                 LOGGER.debug('Failed to start %s', prof_name, exc_info=True)
@@ -1552,7 +1649,7 @@ class MainWindow(QMainWindow):
     def _start_all_profiles(self) -> None:
         ordered = self._build_start_order()
         to_start = [(n, self.profiles[n]) for n in ordered
-                    if self._effective_auto_start(n)]
+                    if self._effective_auto_start(n) and not self._is_profile_running(n)]
         if not to_start:
             QMessageBox.information(self, 'Start all', 'No profiles marked for auto-start.')
             return
@@ -1616,6 +1713,7 @@ class MainWindow(QMainWindow):
 
     def _on_timer(self) -> None:
         self._check_and_reconnect()
+        self._update_tray_tooltip()
         if _TunnelTree.is_dragging:
             return
         new_hash = self._state_hash()
@@ -1643,6 +1741,9 @@ class MainWindow(QMainWindow):
             cfg = self.profiles[prof_name]
             if not cfg.get('auto_reconnect', True):
                 self._profile_errors[prof_name] = 'Disconnected (auto-reconnect disabled)'
+                self._show_tray_notification(
+                    'Tunnel disconnected',
+                    f'"{prof_name}" disconnected. Auto-reconnect is disabled.')
                 continue
 
             attempts = self._reconnect_attempts.get(prof_name, 0) + 1
@@ -1651,6 +1752,9 @@ class MainWindow(QMainWindow):
             delay = _RECONNECT_DELAYS[min(attempts - 1, len(_RECONNECT_DELAYS) - 1)]
             self._reconnect_pending[prof_name] = now + delay
             LOGGER.info('Reconnecting "%s" in %ds (attempt %d)', prof_name, delay, attempts)
+            self._show_tray_notification(
+                'Tunnel disconnected',
+                f'"{prof_name}" disconnected — reconnecting in {delay}s.')
 
         for prof_name, t in list(self._reconnect_pending.items()):
             if now >= t:
