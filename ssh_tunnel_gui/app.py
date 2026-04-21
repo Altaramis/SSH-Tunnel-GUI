@@ -29,6 +29,7 @@ from ssh_tunnel_lib import SSHManager, TunnelConfig
 from ssh_tunnel_lib.connection import _load_private_key
 from ssh_tunnel_gui.encryption import EncryptionManager
 from ssh_tunnel_gui.log_handler import LOG_FORMAT, attach_buffer, make_log_buffer
+from ssh_tunnel_gui._version import __version__
 from ssh_tunnel_gui.dialogs import (
     ChangeMasterPasswordDialog, ExportProfilesDialog, ImportConflictDialog,
     LogFileDialog, MasterPasswordDialog, ProxyDialog, TunnelConfigDialog,
@@ -297,7 +298,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle('SSH Tunnelings')
+        self.setWindowTitle(f'SSH Tunnel GUI {__version__}')
         self.setMinimumSize(900, 400)
 
         _app = QApplication.instance()

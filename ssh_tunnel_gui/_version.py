@@ -1,3 +1,3 @@
 # Copyright (C) 2026  Altaramis
 # SPDX-License-Identifier: GPL-3.0-or-later
-from ssh_tunnel_gui._version import __version__  # noqa: F401
+__version__ = "dev"
