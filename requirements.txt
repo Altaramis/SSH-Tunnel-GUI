@@ -9,4 +9,4 @@ cryptography>=41.0.0
 PyQt6>=6.4.0
 
 # Optional: secure master-password storage
-# keyring>=24.0.0
+keyring>=24.0.0
