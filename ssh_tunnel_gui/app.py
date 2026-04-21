@@ -1016,7 +1016,7 @@ class MainWindow(QMainWindow):
                 lambda _=False, n=prof_name: self._stop_profile(n))
         else:
             act_btn.clicked.connect(
-                lambda _=False, n=prof_name: self._start_profile(n))
+                lambda _=False, n=prof_name: self._start_profile_manual(n))
 
         countdown_lbl = QLabel(f'{countdown}s' if reconnecting else '')
         countdown_lbl.setStyleSheet(lbl_style)
@@ -1587,6 +1587,44 @@ class MainWindow(QMainWindow):
         cfg = cfg.copy()
         cfg['passphrase'] = pwd or None
         return cfg
+
+    def _start_profile_manual(self, prof_name: str) -> None:
+        """Start a profile from a manual button click.
+
+        If the profile has children with auto-start enabled that are not yet
+        running, ask whether to start them too.
+        """
+        autostart_children = [
+            n for n, c in self.profiles.items()
+            if c.get('parent') == prof_name
+            and c.get('auto_start', True)
+            and not self._is_profile_running(n)
+        ]
+
+        if not autostart_children:
+            self._start_profile(prof_name)
+            return
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle('Start profile')
+        msg.setText(f'Start "<b>{prof_name}</b>"?')
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setInformativeText(
+            f'{len(autostart_children)} child profile(s) have auto-start enabled:\n'
+            + '\n'.join(f'  • {n}' for n in autostart_children)
+        )
+        btn_only     = msg.addButton('This profile only',    QMessageBox.ButtonRole.ActionRole)
+        btn_children = msg.addButton('Profile + children',   QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Cancel)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_only:
+            self._start_profile(prof_name)
+        elif clicked == btn_children:
+            self._start_profile(prof_name)
+            for child in autostart_children:
+                self._start_profile(child)
 
     def _start_profile(self, prof_name: str, _is_reconnect: bool = False) -> None:
         cfg = self.profiles.get(prof_name)
