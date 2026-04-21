@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """All modal dialogs for the SSH tunnel GUI (PyQt6)."""
 
+import html as _html
 from typing import Any, Dict, List, Optional
 
 import paramiko
@@ -10,7 +11,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QSpinBox,
-    QSplitter, QVBoxLayout, QWidget,
+    QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from ssh_tunnel_gui.encryption import KEYRING_AVAILABLE
@@ -426,8 +427,61 @@ class ProxyDialog(QDialog):
         }
 
 
+class ExportProfilesDialog(QDialog):
+    """Select which profiles to export."""
+
+    def __init__(self, parent: Optional[QWidget], profile_names: List[str]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Export — select profiles')
+        self.setModal(True)
+        self.setMinimumWidth(360)
+
+        vbox = QVBoxLayout(self)
+        vbox.setContentsMargins(12, 12, 12, 8)
+        vbox.addWidget(QLabel('Select profiles to export:'))
+
+        self._list = QListWidget()
+        for name in profile_names:
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            self._list.addItem(item)
+        vbox.addWidget(self._list)
+
+        btn_row = QHBoxLayout()
+        all_btn  = QPushButton('Check all')
+        none_btn = QPushButton('Uncheck all')
+        all_btn.clicked.connect(lambda: self._set_all(Qt.CheckState.Checked))
+        none_btn.clicked.connect(lambda: self._set_all(Qt.CheckState.Unchecked))
+        btn_row.addWidget(all_btn)
+        btn_row.addWidget(none_btn)
+        vbox.addLayout(btn_row)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        vbox.addWidget(btns)
+
+    def _set_all(self, state: Qt.CheckState) -> None:
+        for i in range(self._list.count()):
+            self._list.item(i).setCheckState(state)
+
+    @property
+    def selected(self) -> List[str]:
+        return [
+            self._list.item(i).text()
+            for i in range(self._list.count())
+            if self._list.item(i).checkState() == Qt.CheckState.Checked
+        ]
+
+
 class ImportConflictDialog(QDialog):
-    """Per-conflict choice: replace (checked) or skip (unchecked), with diff view."""
+    """Review new and conflicting profiles before import.
+
+    Identical profiles are excluded from the dialog and automatically skipped.
+    """
 
     _DIFF_FIELDS: List[tuple] = [
         ('host',               'SSH host'),
@@ -455,137 +509,197 @@ class ImportConflictDialog(QDialog):
         return str(val)
 
     @classmethod
-    def _build_diff(cls, existing: Dict[str, Any],
-                    imported: Dict[str, Any]) -> str:
-        changed:   List[str] = []
-        unchanged: List[str] = []
+    def _proxy_str(cls, cfg: Dict[str, Any]) -> str:
+        p = cfg.get('proxy') or {}
+        if not p.get('addr'):
+            return '—'
+        auth = f' ({p["username"]}@)' if p.get('username') else ''
+        return f"{p.get('proxy_type','socks5')} {p['addr']}:{p.get('port',1080)}{auth}"
+
+    @classmethod
+    def _build_detail_html(cls, existing: Dict[str, Any],
+                           imported: Dict[str, Any], is_new: bool) -> str:
         col = 22
-
+        rows: List[str] = []
         for key, label in cls._DIFF_FIELDS:
-            fe = cls._fmt(key, existing.get(key))
-            fi = cls._fmt(key, imported.get(key))
-            if fe != fi:
-                changed.append(f'  {label:<{col}} {fe}  →  {fi}')
+            fi = _html.escape(cls._fmt(key, imported.get(key)))
+            if is_new:
+                rows.append(f'  {label:<{col}} {fi}')
             else:
-                unchanged.append(f'  {label:<{col}} {fe}')
+                fe = _html.escape(cls._fmt(key, existing.get(key)))
+                if fe != fi:
+                    rows.append(
+                        f'  {label:<{col}} '
+                        f'<b style="color:#e07800">{fe}  →  {fi}</b>'
+                    )
+                else:
+                    rows.append(f'  {label:<{col}} {fi}')
 
-        # proxy
-        def proxy_str(cfg: Dict[str, Any]) -> str:
-            p = cfg.get('proxy') or {}
-            if not p.get('addr'):
-                return '—'
-            auth = f' ({p["username"]}@)' if p.get('username') else ''
-            return f"{p.get('proxy_type','socks5')} {p['addr']}:{p.get('port',1080)}{auth}"
-
-        pe, pi = proxy_str(existing), proxy_str(imported)
-        label = 'Proxy'
-        if pe != pi:
-            changed.append(f'  {label:<{col}} {pe}  →  {pi}')
+        pi = _html.escape(cls._proxy_str(imported))
+        if is_new:
+            rows.append(f'  {"Proxy":<{col}} {pi}')
         else:
-            unchanged.append(f'  {label:<{col}} {pe}')
+            pe = _html.escape(cls._proxy_str(existing))
+            if pe != pi:
+                rows.append(
+                f'  {"Proxy":<{col}} '
+                f'<b style="color:#e07800">{pe}  →  {pi}</b>'
+            )
+            else:
+                rows.append(f'  {"Proxy":<{col}} {pi}')
 
-        parts: List[str] = []
-        if changed:
-            parts.append('Changed:\n' + '\n'.join(changed))
-        if unchanged:
-            parts.append('Unchanged:\n' + '\n'.join(unchanged))
-        return '\n\n'.join(parts) if parts else '(identical)'
+        title = 'New profile:' if is_new else 'Existing  →  Imported  (bold = changed):'
+        return '<pre style="margin:0">' + title + '\n' + '\n'.join(rows) + '</pre>'
 
-    def __init__(self, parent: Optional[QWidget], conflicts: List[str],
-                 total: int,
+    def __init__(self, parent: Optional[QWidget],
+                 conflicts: List[str],
+                 new_profiles: List[str],
+                 skipped: int,
                  existing: Optional[Dict[str, Any]] = None,
                  imported: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(parent)
         self._existing = existing or {}
         self._imported = imported or {}
+        self._new_list: Optional[QListWidget] = None
+        self._conflict_list: Optional[QListWidget] = None
+        self._diff: Optional[QTextEdit] = None
+        self._selecting = False
 
-        self.setWindowTitle('Import — conflicts')
+        self.setWindowTitle('Import — review')
         self.setModal(True)
         self.setMinimumSize(700, 420)
-        self.resize(820, 500)
+        self.resize(860, 520)
 
         vbox = QVBoxLayout(self)
         vbox.setContentsMargins(12, 12, 12, 8)
 
-        lbl = QLabel(
-            f'<b>{total}</b> profile(s) to import, '
-            f'<b>{len(conflicts)}</b> already exist.<br>'
-            'Check the profiles you want to <b>replace</b>; uncheck to skip.'
-        )
-        vbox.addWidget(lbl)
+        # Summary line
+        parts: List[str] = []
+        if new_profiles:
+            parts.append(f'<b>{len(new_profiles)}</b> new profile(s)')
+        if conflicts:
+            parts.append(f'<b>{len(conflicts)}</b> existing profile(s) with changes')
+        if skipped:
+            parts.append(f'<b>{skipped}</b> identical (skipped automatically)')
+        vbox.addWidget(QLabel(', '.join(parts) + '.'))
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        has_conflicts = bool(conflicts)
 
-        # Left — checklist
+        # Left panel — new profiles + conflicts checklists
         left = QWidget()
         left_vbox = QVBoxLayout(left)
         left_vbox.setContentsMargins(0, 0, 4, 0)
-        left_vbox.addWidget(QLabel('Conflicts:'))
-        self._list = QListWidget()
-        self._list.setMinimumWidth(180)
-        for name in conflicts:
-            item = QListWidgetItem(name)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-            self._list.addItem(item)
-        self._list.currentRowChanged.connect(self._on_selection)
-        left_vbox.addWidget(self._list)
 
-        btn_row = QHBoxLayout()
-        all_btn  = QPushButton('Check all')
-        none_btn = QPushButton('Uncheck all')
-        all_btn.clicked.connect(lambda: self._set_all(Qt.CheckState.Checked))
-        none_btn.clicked.connect(lambda: self._set_all(Qt.CheckState.Unchecked))
-        btn_row.addWidget(all_btn)
-        btn_row.addWidget(none_btn)
-        left_vbox.addLayout(btn_row)
+        if new_profiles:
+            left_vbox.addWidget(QLabel('<b>New profiles</b> — check to import:'))
+            self._new_list = QListWidget()
+            for name in new_profiles:
+                item = QListWidgetItem(name)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked)
+                self._new_list.addItem(item)
+            self._new_list.currentRowChanged.connect(self._on_new_selected)
+            left_vbox.addWidget(self._new_list)
+            btn_row = QHBoxLayout()
+            for lbl, st in [('Check all', Qt.CheckState.Checked),
+                             ('Uncheck all', Qt.CheckState.Unchecked)]:
+                b = QPushButton(lbl)
+                b.clicked.connect(lambda _, s=st, lst=self._new_list: self._set_all(lst, s))
+                btn_row.addWidget(b)
+            left_vbox.addLayout(btn_row)
+
+        if conflicts:
+            left_vbox.addWidget(QLabel('<b>Conflicts</b> — check to <b>replace</b>; uncheck to skip:'))
+            self._conflict_list = QListWidget()
+            for name in conflicts:
+                item = QListWidgetItem(name)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked)
+                self._conflict_list.addItem(item)
+            self._conflict_list.currentRowChanged.connect(self._on_conflict_selected)
+            left_vbox.addWidget(self._conflict_list)
+            btn_row2 = QHBoxLayout()
+            for lbl, st in [('Check all', Qt.CheckState.Checked),
+                             ('Uncheck all', Qt.CheckState.Unchecked)]:
+                b = QPushButton(lbl)
+                b.clicked.connect(lambda _, s=st, lst=self._conflict_list: self._set_all(lst, s))
+                btn_row2.addWidget(b)
+            left_vbox.addLayout(btn_row2)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left)
-
-        # Right — diff panel
         right = QWidget()
         right_vbox = QVBoxLayout(right)
         right_vbox.setContentsMargins(4, 0, 0, 0)
-        right_vbox.addWidget(QLabel('Differences (existing  →  imported):'))
-        self._diff = QPlainTextEdit()
+        detail_lbl = 'Changes (existing  →  imported):' if has_conflicts else 'Profile details:'
+        right_vbox.addWidget(QLabel(detail_lbl))
+        self._diff = QTextEdit()
         self._diff.setReadOnly(True)
-        self._diff.setFont(self._diff.document().defaultFont())
         right_vbox.addWidget(self._diff)
         splitter.addWidget(right)
-
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
         vbox.addWidget(splitter, 1)
+        if self._conflict_list and self._conflict_list.count():
+            self._conflict_list.setCurrentRow(0)
+        elif self._new_list and self._new_list.count():
+            self._new_list.setCurrentRow(0)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok |
-            QDialogButtonBox.StandardButton.Cancel
-        )
+            QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         vbox.addWidget(btns)
 
-        if self._list.count():
-            self._list.setCurrentRow(0)
-
-    def _on_selection(self, row: int) -> None:
-        if row < 0:
-            self._diff.setPlainText('')
+    def _on_new_selected(self, row: int) -> None:
+        if self._selecting or row < 0 or self._diff is None or self._new_list is None:
             return
-        name = self._list.item(row).text()
-        ex = self._existing.get(name, {})
-        im = self._imported.get(name, {})
-        self._diff.setPlainText(self._build_diff(ex, im))
+        if self._conflict_list is not None:
+            self._selecting = True
+            self._conflict_list.setCurrentRow(-1)
+            self._selecting = False
+        name = self._new_list.item(row).text()
+        self._diff.setHtml(self._build_detail_html(
+            {}, self._imported.get(name, {}), is_new=True))
 
-    def _set_all(self, state: Qt.CheckState) -> None:
-        for i in range(self._list.count()):
-            self._list.item(i).setCheckState(state)
+    def _on_conflict_selected(self, row: int) -> None:
+        if self._selecting or row < 0 or self._diff is None or self._conflict_list is None:
+            return
+        if self._new_list is not None:
+            self._selecting = True
+            self._new_list.setCurrentRow(-1)
+            self._selecting = False
+        name = self._conflict_list.item(row).text()
+        self._diff.setHtml(self._build_detail_html(
+            self._existing.get(name, {}),
+            self._imported.get(name, {}),
+            is_new=False,
+        ))
+
+    @staticmethod
+    def _set_all(lst: QListWidget, state: Qt.CheckState) -> None:
+        for i in range(lst.count()):
+            lst.item(i).setCheckState(state)
+
+    @property
+    def to_import_new(self) -> List[str]:
+        if self._new_list is None:
+            return []
+        return [
+            self._new_list.item(i).text()
+            for i in range(self._new_list.count())
+            if self._new_list.item(i).checkState() == Qt.CheckState.Checked
+        ]
 
     @property
     def to_replace(self) -> List[str]:
+        if self._conflict_list is None:
+            return []
         return [
-            self._list.item(i).text()
-            for i in range(self._list.count())
-            if self._list.item(i).checkState() == Qt.CheckState.Checked
+            self._conflict_list.item(i).text()
+            for i in range(self._conflict_list.count())
+            if self._conflict_list.item(i).checkState() == Qt.CheckState.Checked
         ]
 
 

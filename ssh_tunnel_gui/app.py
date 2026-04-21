@@ -30,13 +30,29 @@ from ssh_tunnel_lib.connection import _load_private_key
 from ssh_tunnel_gui.encryption import EncryptionManager
 from ssh_tunnel_gui.log_handler import LOG_FORMAT, attach_buffer, make_log_buffer
 from ssh_tunnel_gui.dialogs import (
-    ChangeMasterPasswordDialog, ImportConflictDialog, LogFileDialog,
-    MasterPasswordDialog, ProxyDialog, TunnelConfigDialog,
+    ChangeMasterPasswordDialog, ExportProfilesDialog, ImportConflictDialog,
+    LogFileDialog, MasterPasswordDialog, ProxyDialog, TunnelConfigDialog,
 )
 
 PROFILE_FILE = 'ssh_profiles.json'
 CONFIG_FILE  = 'ssh_tunnel_config.json'
 LOGGER = logging.getLogger('ssh_tunnel_table')
+
+_PROFILE_CMP_FIELDS = (
+    'host', 'port', 'username', 'forward_type', 'bind_addr', 'bind_port',
+    'remote_host', 'remote_port', 'use_agent', 'password', 'keyfile',
+    'passphrase', 'auto_reconnect', 'keepalive_interval',
+)
+
+
+def _profile_fields_equal(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    if any(a.get(f) != b.get(f) for f in _PROFILE_CMP_FIELDS):
+        return False
+    pa, pb = (a.get('proxy') or {}), (b.get('proxy') or {})
+    return (pa.get('addr') == pb.get('addr') and
+            pa.get('port') == pb.get('port') and
+            pa.get('proxy_type') == pb.get('proxy_type') and
+            pa.get('username') == pb.get('username'))
 _RECONNECT_DELAYS = [5, 10, 30, 60]
 
 _COL_HEADERS = ['Name', 'Type', 'Auto', '', 'Bind Port', '⇄', 'Target', 'SSH Server', 'Proxy', '⚙']
@@ -1304,6 +1320,14 @@ class MainWindow(QMainWindow):
         if not self.profiles:
             QMessageBox.information(self, 'Export', 'No profiles to export.')
             return
+
+        sel_dlg = ExportProfilesDialog(self, sorted(self.profiles.keys()))
+        if sel_dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        to_export = sel_dlg.selected
+        if not to_export:
+            return
+
         path, _ = QFileDialog.getSaveFileName(self, 'Export profiles', '',
                                               'JSON files (*.json);;All files (*)')
         if not path:
@@ -1313,8 +1337,8 @@ class MainWindow(QMainWindow):
                 '_meta':   {'salt': base64.b64encode(self.encryption_manager._salt).decode()},
                 '_verify': self.encryption_manager.encrypt('ok'),
             }
-            for name, cfg in self.profiles.items():
-                enc = cfg.copy()
+            for name in to_export:
+                enc = self.profiles[name].copy()
                 for field in ('password', 'passphrase', 'keyfile'):
                     if enc.get(field):
                         enc[field] = self.encryption_manager.encrypt(enc[field])
@@ -1325,7 +1349,7 @@ class MainWindow(QMainWindow):
                 out[name] = enc
             with open(path, 'w') as f:
                 json.dump(out, f, indent=2)
-            QMessageBox.information(self, 'Export', f'Exported {len(self.profiles)} profile(s).')
+            QMessageBox.information(self, 'Export', f'Exported {len(to_export)} profile(s).')
         except Exception as e:
             QMessageBox.critical(self, 'Export error', str(e))
 
@@ -1337,70 +1361,104 @@ class MainWindow(QMainWindow):
         try:
             with open(path) as f:
                 raw = json.load(f)
+            if not isinstance(raw, dict):
+                raise ValueError('Invalid format: expected a JSON object.')
         except Exception as e:
             QMessageBox.critical(self, 'Import error', f'Cannot read file: {e}')
             return
 
-        import_pwd, ok = QInputDialog.getText(
-            self, 'Import password',
-            'Master password for the imported file:',
-            QLineEdit.EchoMode.Password,
-        )
-        if not ok or not import_pwd:
-            return
+        has_encryption = '_verify' in raw
+        em: Optional[EncryptionManager] = None
 
-        try:
-            salt_b64 = raw.get('_meta', {}).get('salt')
-            import_salt = base64.b64decode(salt_b64) if salt_b64 else EncryptionManager._DEFAULT_SALT
-            em = EncryptionManager(salt=import_salt)
-            em.set_password(import_pwd)
-            verify = raw.get('_verify')
-            if verify and em.decrypt(verify) != 'ok':
-                QMessageBox.critical(self, 'Import error', 'Import password invalid.')
+        if has_encryption:
+            import_pwd, ok = QInputDialog.getText(
+                self, 'Import password',
+                'Master password for the imported file:',
+                QLineEdit.EchoMode.Password,
+            )
+            if not ok or not import_pwd:
                 return
-        except InvalidToken:
-            QMessageBox.critical(self, 'Import error', 'Import password invalid or file corrupted.')
-            return
-        except Exception as e:
-            QMessageBox.critical(self, 'Import error', str(e))
-            return
+            try:
+                salt_b64 = raw.get('_meta', {}).get('salt')
+                import_salt = (base64.b64decode(salt_b64) if salt_b64
+                               else EncryptionManager._DEFAULT_SALT)
+                em = EncryptionManager(salt=import_salt)
+                em.set_password(import_pwd)
+                if em.decrypt(raw['_verify']) != 'ok':
+                    QMessageBox.critical(self, 'Import error', 'Import password invalid.')
+                    return
+            except InvalidToken:
+                QMessageBox.critical(self, 'Import error',
+                                     'Import password invalid or file corrupted.')
+                return
+            except Exception as e:
+                QMessageBox.critical(self, 'Import error', str(e))
+                return
 
         imported: Dict[str, Any] = {}
         for name, cfg in raw.items():
             if name in ('_meta', '_verify'):
                 continue
-            dec = cfg.copy()
-            for field in ('password', 'passphrase', 'keyfile'):
-                if dec.get(field):
-                    try:
-                        dec[field] = em.decrypt(dec[field])
-                    except Exception:
-                        dec[field] = None
-            if dec.get('proxy') and dec['proxy'].get('password'):
-                dec['proxy'] = dec['proxy'].copy()
-                try:
-                    dec['proxy']['password'] = em.decrypt(dec['proxy']['password'])
-                except Exception:
-                    dec['proxy']['password'] = None
-            dec.setdefault('auto_start', True)
-            dec.setdefault('start_order', 999)
-            dec.setdefault('auto_reconnect', True)
-            dec.setdefault('keepalive_interval', 30)
-            dec.setdefault('parent', None)
-            if dec.get('proxy') and 'proxy_type' not in dec['proxy']:
-                dec['proxy']['proxy_type'] = 'socks5'
-            imported[name] = dec
+            try:
+                if not isinstance(cfg, dict):
+                    continue
+                dec = cfg.copy()
+                if em is not None:
+                    for field in ('password', 'passphrase', 'keyfile'):
+                        if dec.get(field):
+                            try:
+                                dec[field] = em.decrypt(dec[field])
+                            except Exception:
+                                dec[field] = None
+                    if dec.get('proxy') and dec['proxy'].get('password'):
+                        dec['proxy'] = dec['proxy'].copy()
+                        try:
+                            dec['proxy']['password'] = em.decrypt(dec['proxy']['password'])
+                        except Exception:
+                            dec['proxy']['password'] = None
+                dec.setdefault('auto_start', True)
+                dec.setdefault('start_order', 999)
+                dec.setdefault('auto_reconnect', True)
+                dec.setdefault('keepalive_interval', 30)
+                dec.setdefault('parent', None)
+                if dec.get('proxy') and 'proxy_type' not in dec['proxy']:
+                    dec['proxy']['proxy_type'] = 'socks5'
+                imported[name] = dec
+            except Exception:
+                LOGGER.warning("Skipping invalid profile entry '%s'", name)
 
-        conflicts = [n for n in imported if n in self.profiles]
-        if conflicts:
-            dlg = ImportConflictDialog(self, conflicts, len(imported),
-                                       existing=self.profiles,
-                                       imported=imported)
+        if not imported:
+            QMessageBox.information(self, 'Import', 'No valid profiles found in file.')
+            return
+
+        # Categorize: new / identical (auto-skip) / changed (conflicts)
+        new_profiles = [n for n in imported if n not in self.profiles]
+        existing_names = [n for n in imported if n in self.profiles]
+        identical = [n for n in existing_names
+                     if _profile_fields_equal(imported[n], self.profiles[n])]
+        conflicts = [n for n in existing_names if n not in identical]
+
+        for n in identical:
+            del imported[n]
+
+        if not imported:
+            QMessageBox.information(
+                self, 'Import',
+                f'Nothing to import — all {len(identical)} profile(s) are already up to date.')
+            return
+
+        if new_profiles or conflicts:
+            dlg = ImportConflictDialog(self, conflicts, new_profiles, len(identical),
+                                       existing=self.profiles, imported=imported)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
-            to_replace = set(dlg.to_replace)
-            imported = {k: v for k, v in imported.items()
-                        if k not in conflicts or k in to_replace}
+            accepted_new     = set(dlg.to_import_new)
+            accepted_replace = set(dlg.to_replace)
+            imported = {
+                k: v for k, v in imported.items()
+                if (k in new_profiles and k in accepted_new) or
+                   (k in conflicts and k in accepted_replace)
+            }
             if not imported:
                 return
 
