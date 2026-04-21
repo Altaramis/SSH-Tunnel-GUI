@@ -1039,7 +1039,10 @@ class MainWindow(QMainWindow):
     def _on_item_double_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
         prof_name = item.data(0, Qt.ItemDataRole.UserRole)
         if prof_name:
+            was_expanded = item.isExpanded()
             self._edit_profile(prof_name)
+            if item.childCount() > 0:
+                QTimer.singleShot(0, lambda: item.setExpanded(was_expanded))
 
     # Widget columns — clicking them activates the widget, not the menu
     _WIDGET_COLS = {2, _COL_ACT, 9}
