@@ -17,6 +17,10 @@ Tunnels can be chained hierarchically — for example, routing a connection
 through an intermediate SOCKS5 proxy tunnel — and reconnect automatically
 on failure. Credentials are stored encrypted with a master password.
 
+### How SSH tunnels work
+
+![SSH Tunnels — Explanatory Diagram](tunnels_en.svg)
+
 ### Features
 
 - Local, Dynamic (SOCKS5), and Remote SSH tunnel types
@@ -142,6 +146,10 @@ Les tunnels peuvent être chaînés hiérarchiquement — par exemple, faire tra
 une connexion par un tunnel proxy SOCKS5 intermédiaire — et se reconnectent
 automatiquement en cas de coupure. Les identifiants sont chiffrés avec un mot de
 passe maître.
+
+### Fonctionnement des tunnels SSH
+
+![SSH Tunnels — Schéma explicatif](tunnels_fr.svg)
 
 ### Fonctionnalités
 
