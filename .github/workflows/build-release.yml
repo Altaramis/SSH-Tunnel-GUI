@@ -40,12 +40,16 @@ jobs:
       - name: Installer les dépendances Python
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade wheel setuptools nuitka
+          pip install --upgrade wheel setuptools
           pip install -r requirements.txt
 
-      - name: Installer imageio (macOS — conversion PNG → icns pour Nuitka)
+      - name: Installer Nuitka (Windows / Linux)
+        if: matrix.label != 'macos'
+        run: pip install --upgrade nuitka
+
+      - name: Installer PyInstaller (macOS — Nuitka ne supporte pas PyQt6 sur macOS)
         if: matrix.label == 'macos'
-        run: pip install imageio
+        run: pip install pyinstaller
 
       - name: Injecter la version (Windows)
         if: matrix.label == 'windows'
@@ -94,20 +98,17 @@ jobs:
             --assume-yes-for-downloads \
             ./ssh_tunnel.py
 
-      - name: Compiler avec Nuitka (macOS)
+      - name: Compiler avec PyInstaller (macOS)
         if: matrix.label == 'macos'
         run: |
-          python -m nuitka \
+          pyinstaller \
             --onefile \
-            --onefile-no-compression \
-            --remove-output \
-            --standalone \
-            --enable-plugin=pyqt6 \
-            --macos-app-icon=logo.png \
-            --include-data-files=logo.ico=logo.ico \
-            --output-filename=ssh_tunnel \
-            --assume-yes-for-downloads \
+            --windowed \
+            --icon=logo.ico \
+            --add-data "logo.ico:." \
+            --name ssh_tunnel \
             ./ssh_tunnel.py
+          mv dist/ssh_tunnel ./ssh_tunnel
 
       - name: Créer le zip de release (Windows)
         if: matrix.label == 'windows'
