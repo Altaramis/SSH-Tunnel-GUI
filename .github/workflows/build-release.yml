@@ -43,6 +43,10 @@ jobs:
           pip install --upgrade wheel setuptools nuitka
           pip install -r requirements.txt
 
+      - name: Installer imageio (macOS — conversion PNG → icns pour Nuitka)
+        if: matrix.label == 'macos'
+        run: pip install imageio
+
       - name: Injecter la version (Windows)
         if: matrix.label == 'windows'
         run: |
