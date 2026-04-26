@@ -49,7 +49,7 @@ jobs:
 
       - name: Installer PyInstaller (macOS — Nuitka ne supporte pas PyQt6 sur macOS)
         if: matrix.label == 'macos'
-        run: pip install pyinstaller
+        run: pip install pyinstaller pillow
 
       - name: Injecter la version (Windows)
         if: matrix.label == 'windows'
