@@ -90,6 +90,7 @@ jobs:
             --enable-plugin=pyqt6 \
             --linux-onefile-icon=logo.png \
             --include-data-files=logo.ico=logo.ico \
+            --output-filename=ssh_tunnel \
             --assume-yes-for-downloads \
             ./ssh_tunnel.py
 
@@ -104,6 +105,7 @@ jobs:
             --enable-plugin=pyqt6 \
             --macos-app-icon=logo.png \
             --include-data-files=logo.ico=logo.ico \
+            --output-filename=ssh_tunnel \
             --assume-yes-for-downloads \
             ./ssh_tunnel.py
 
