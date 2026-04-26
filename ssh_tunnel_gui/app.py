@@ -1135,8 +1135,11 @@ class MainWindow(QMainWindow):
         if prof_name:
             was_expanded = item.isExpanded()
             self._edit_profile(prof_name)
-            if item.childCount() > 0:
-                QTimer.singleShot(0, lambda: item.setExpanded(was_expanded))
+            try:
+                if item.childCount() > 0:
+                    QTimer.singleShot(0, lambda: item.setExpanded(was_expanded))
+            except RuntimeError:
+                pass  # tree was repopulated during edit; expansion handled by _repopulate_tree
 
     # Widget columns — clicking them activates the widget, not the menu
     _WIDGET_COLS = {2, _COL_ACT, 9}
