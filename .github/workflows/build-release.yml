@@ -5,9 +5,6 @@ on:
     types: [published]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     strategy:
@@ -27,10 +24,10 @@ jobs:
 
     steps:
       - name: Récupérer le code source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configurer Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -130,7 +127,7 @@ jobs:
           zip "ssh_tunnel_gui_${version}_${{ matrix.label }}.zip" ssh_tunnel
 
       - name: Ajouter l'exécutable à la Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ssh_tunnel_gui_*.zip
         env:
