@@ -26,12 +26,13 @@ from cryptography.fernet import InvalidToken
 import paramiko
 
 from ssh_tunnel_lib import SSHManager, TunnelConfig
-from ssh_tunnel_lib.connection import _load_private_key
+from ssh_tunnel_lib.connection import KNOWN_HOSTS_FILE, _fingerprint, _load_private_key
 from ssh_tunnel_gui.encryption import EncryptionManager
 from ssh_tunnel_gui.log_handler import LOG_FORMAT, attach_buffer, make_log_buffer
 from ssh_tunnel_gui._version import __version__
 from ssh_tunnel_gui.dialogs import (
-    ChangeMasterPasswordDialog, ExportProfilesDialog, ImportConflictDialog,
+    ChangeMasterPasswordDialog, ExportProfilesDialog, HostKeyChangedDialog,
+    HostKeyVerificationDialog, ImportConflictDialog,
     LogFileDialog, MasterPasswordDialog, ProxyDialog, TunnelConfigDialog,
 )
 
@@ -293,8 +294,10 @@ class _TunnelTree(QTreeWidget):
 class MainWindow(QMainWindow):
     """Primary application window."""
 
-    _refresh_requested = pyqtSignal()
-    _tray_message      = pyqtSignal(str, str)  # title, body — safe to emit from threads
+    _refresh_requested    = pyqtSignal()
+    _tray_message         = pyqtSignal(str, str)   # title, body — safe to emit from threads
+    _host_key_request     = pyqtSignal(str, str, str, object)   # hostname, key_type, fingerprint, ctx
+    _changed_key_request  = pyqtSignal(str, str, str, str, object)  # hostname, key_type, old_fp, new_fp, ctx
 
     def __init__(self) -> None:
         super().__init__()
@@ -327,6 +330,8 @@ class MainWindow(QMainWindow):
         self._tray_minimize_notified = False
         self._refresh_requested.connect(self._repopulate_tree)
         self._tray_message.connect(self._show_tray_notification)
+        self._host_key_request.connect(self._on_host_key_request)
+        self._changed_key_request.connect(self._on_changed_key_request)
 
         self._config: Dict[str, Any] = {}
         self._file_log_handler: Optional[logging.Handler] = None
@@ -1569,6 +1574,20 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ Start / Stop
 
+    def _on_host_key_request(
+        self, hostname: str, key_type: str, fingerprint: str, ctx: dict
+    ) -> None:
+        dlg = HostKeyVerificationDialog(self, hostname, key_type, fingerprint)
+        ctx['decision'] = dlg.decision if dlg.exec() == QDialog.DialogCode.Accepted else 'reject'
+        ctx['event'].set()
+
+    def _on_changed_key_request(
+        self, hostname: str, key_type: str, old_fp: str, new_fp: str, ctx: dict
+    ) -> None:
+        dlg = HostKeyChangedDialog(self, hostname, key_type, old_fp, new_fp)
+        ctx['decision'] = dlg.decision if dlg.exec() == QDialog.DialogCode.Accepted else 'reject'
+        ctx['event'].set()
+
     def _ensure_passphrase(self, prof_name: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """If the key file needs a passphrase not yet stored, prompt the user. Returns None on cancel."""
         keyfile = cfg.get('keyfile')
@@ -1627,8 +1646,23 @@ class MainWindow(QMainWindow):
             self._start_profile(prof_name)
         elif clicked == btn_children:
             self._start_profile(prof_name)
-            for child in autostart_children:
-                self._start_profile(child)
+
+            children = list(autostart_children)
+
+            def _start_children_when_ready() -> None:
+                # Wait for the parent to become active (e.g. host-key dialog may
+                # delay it) before routing children through its SOCKS5 proxy.
+                deadline = time.monotonic() + 300
+                while time.monotonic() < deadline:
+                    if self._is_profile_running(prof_name):
+                        for child in children:
+                            self._start_profile(child)
+                        return
+                    if prof_name in self._profile_errors:
+                        return  # parent failed — don't attempt children
+                    time.sleep(0.5)
+
+            threading.Thread(target=_start_children_when_ready, daemon=True).start()
 
     def _start_profile(self, prof_name: str, _is_reconnect: bool = False) -> None:
         cfg = self.profiles.get(prof_name)
@@ -1641,15 +1675,41 @@ class MainWindow(QMainWindow):
             if cfg is None:
                 return
 
+        def host_key_callback(hostname: str, key_type: str, fingerprint: str) -> str:
+            ctx: dict = {'event': threading.Event(), 'decision': 'reject'}
+            self._host_key_request.emit(hostname, key_type, fingerprint, ctx)
+            ctx['event'].wait()
+            return ctx['decision']
+
+        def changed_key_callback(hostname: str, key_type: str, old_fp: str, new_fp: str) -> str:
+            ctx: dict = {'event': threading.Event(), 'decision': 'reject'}
+            self._changed_key_request.emit(hostname, key_type, old_fp, new_fp, ctx)
+            ctx['event'].wait()
+            return ctx['decision']
+
         def worker() -> None:
             try:
                 LOGGER.info('%s %s', 'Reconnecting' if _is_reconnect else 'Starting', prof_name)
                 config = self._make_tunnel_config(prof_name, cfg)
-                self.manager.create_tunnel(config)
+                self.manager.create_tunnel(
+                    config,
+                    host_key_callback=host_key_callback,
+                    changed_key_callback=changed_key_callback,
+                )
                 self._profile_errors.pop(prof_name, None)
                 self._reconnect_attempts.pop(prof_name, None)
                 if _is_reconnect:
                     self._tray_message.emit('Tunnel reconnected', f'"{prof_name}" is back online.')
+            except paramiko.BadHostKeyException as exc:
+                old_fp = _fingerprint(exc.expected_key)
+                new_fp = _fingerprint(exc.key)
+                LOGGER.error('Host key mismatch for %s: stored=%s received=%s',
+                             exc.hostname, old_fp, new_fp)
+                self._profile_errors[prof_name] = (
+                    f"Host key mismatch for '{exc.hostname}'.\n"
+                    f"Stored:   {old_fp}\n"
+                    f"Received: {new_fp}"
+                )
             except Exception as exc:
                 LOGGER.error('Failed to start %s: %s', prof_name, exc)
                 LOGGER.debug('Failed to start %s', prof_name, exc_info=True)
@@ -1701,13 +1761,39 @@ class MainWindow(QMainWindow):
         ) != QMessageBox.StandardButton.Yes:
             return
 
+        def host_key_callback(hostname: str, key_type: str, fingerprint: str) -> str:
+            ctx: dict = {'event': threading.Event(), 'decision': 'reject'}
+            self._host_key_request.emit(hostname, key_type, fingerprint, ctx)
+            ctx['event'].wait()
+            return ctx['decision']
+
+        def changed_key_callback(hostname: str, key_type: str, old_fp: str, new_fp: str) -> str:
+            ctx: dict = {'event': threading.Event(), 'decision': 'reject'}
+            self._changed_key_request.emit(hostname, key_type, old_fp, new_fp, ctx)
+            ctx['event'].wait()
+            return ctx['decision']
+
         def worker() -> None:
             for name, cfg in to_start:
                 self._profile_errors.pop(name, None)
                 try:
                     LOGGER.info('Starting %s (order %s)', name, cfg.get('start_order'))
                     config = self._make_tunnel_config(name, cfg)
-                    self.manager.create_tunnel(config)
+                    self.manager.create_tunnel(
+                        config,
+                        host_key_callback=host_key_callback,
+                        changed_key_callback=changed_key_callback,
+                    )
+                except paramiko.BadHostKeyException as exc:
+                    old_fp = _fingerprint(exc.expected_key)
+                    new_fp = _fingerprint(exc.key)
+                    LOGGER.error('Host key mismatch for %s: stored=%s received=%s',
+                                 exc.hostname, old_fp, new_fp)
+                    self._profile_errors[name] = (
+                        f"Host key mismatch for '{exc.hostname}'.\n"
+                        f"Stored:   {old_fp}\n"
+                        f"Received: {new_fp}"
+                    )
                 except Exception as exc:
                     LOGGER.error('Failed to start %s: %s', name, exc)
                     LOGGER.debug('Failed to start %s', name, exc_info=True)

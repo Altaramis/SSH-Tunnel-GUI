@@ -6,6 +6,7 @@ venv*/
 # Sensitive user data
 ssh_profiles.json
 ssh_tunnel_config.json
+ssh_known_hosts
 backup/
 old/
 

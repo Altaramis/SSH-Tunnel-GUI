@@ -5,7 +5,7 @@
 import logging
 import threading
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ssh_tunnel_lib.connection import SSHConnection
 from ssh_tunnel_lib.tunnel_config import TunnelConfig
@@ -66,10 +66,16 @@ class SSHManager:
         self,
         config: TunnelConfig,
         instance_id: Optional[str] = None,
+        host_key_callback: Optional[Callable[[str, str, str], str]] = None,
+        changed_key_callback: Optional[Callable[[str, str, str, str], str]] = None,
     ) -> str:
         if instance_id is None:
             instance_id = str(uuid.uuid4())
-        connection = SSHConnection.open(config)
+        connection = SSHConnection.open(
+            config,
+            host_key_callback=host_key_callback,
+            changed_key_callback=changed_key_callback,
+        )
         tunnel = create_tunnel(connection, config)
         inst = TunnelInstance(instance_id, connection, tunnel, config)
         with self._lock:

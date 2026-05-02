@@ -785,3 +785,143 @@ class LogFileDialog(QDialog):
             'log_max_mb':       self._max_mb.value(),
             'log_backups':      self._backups.value(),
         }
+
+
+def _mono_label(text: str) -> QLabel:
+    """Return a QLabel with monospace font, selectable by mouse."""
+    lbl = QLabel(text)
+    font = lbl.font()
+    font.setFamily('Courier New')
+    font.setPointSize(max(font.pointSize() - 1, 8))
+    lbl.setFont(font)
+    lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    return lbl
+
+
+class HostKeyVerificationDialog(QDialog):
+    """Shown when connecting to a host not yet present in known_hosts (TOFU prompt)."""
+
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        hostname: str,
+        key_type: str,
+        fingerprint: str,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Unknown SSH Host Key')
+        self.setModal(True)
+        self.setMinimumWidth(500)
+
+        self._decision = 'reject'
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 8)
+        layout.setSpacing(10)
+
+        intro = QLabel(
+            'The authenticity of the following host could not be established.\n'
+            'Verify the fingerprint through a trusted channel before accepting.'
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 4, 0, 4)
+        form.addRow('Host:', QLabel(hostname))
+        form.addRow('Key type:', QLabel(key_type))
+        form.addRow('Fingerprint:', _mono_label(fingerprint))
+        layout.addLayout(form)
+
+        btn_reject = QPushButton('Reject')
+        btn_once   = QPushButton('Accept once')
+        btn_perm   = QPushButton('Accept permanently')
+        btn_reject.setDefault(True)
+
+        btn_reject.clicked.connect(self.reject)
+        btn_once.clicked.connect(self._accept_once)
+        btn_perm.clicked.connect(self._accept_permanently)
+
+        btn_box = QDialogButtonBox()
+        btn_box.addButton(btn_reject, QDialogButtonBox.ButtonRole.RejectRole)
+        btn_box.addButton(btn_once,   QDialogButtonBox.ButtonRole.AcceptRole)
+        btn_box.addButton(btn_perm,   QDialogButtonBox.ButtonRole.AcceptRole)
+        layout.addWidget(btn_box)
+
+    def _accept_once(self) -> None:
+        self._decision = 'accept_once'
+        self.accept()
+
+    def _accept_permanently(self) -> None:
+        self._decision = 'accept_permanently'
+        self.accept()
+
+    @property
+    def decision(self) -> str:
+        """'accept_once' | 'accept_permanently' | 'reject'"""
+        return self._decision
+
+
+class HostKeyChangedDialog(QDialog):
+    """Shown when the server's host key differs from the one stored in known_hosts."""
+
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        hostname: str,
+        key_type: str,
+        old_fingerprint: str,
+        new_fingerprint: str,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('SSH Host Key Changed')
+        self.setModal(True)
+        self.setMinimumWidth(520)
+
+        self._decision = 'reject'
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 8)
+        layout.setSpacing(10)
+
+        warning = QLabel(
+            '<b>WARNING:</b> The SSH host key for this server has changed.<br>'
+            'This may indicate a man-in-the-middle attack, or the server key '
+            'may have been legitimately updated (e.g. after a reinstall).<br>'
+            'Verify the new fingerprint through a trusted channel before updating.'
+        )
+        warning.setTextFormat(Qt.TextFormat.RichText)
+        warning.setWordWrap(True)
+        layout.addWidget(warning)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 4, 0, 4)
+        form.addRow('Host:', QLabel(hostname))
+        form.addRow('Key type:', QLabel(key_type))
+
+        old_lbl = _mono_label(old_fingerprint)
+        old_lbl.setStyleSheet('color: #cc0000;')
+        form.addRow('Stored (old):', old_lbl)
+        form.addRow('Received (new):', _mono_label(new_fingerprint))
+        layout.addLayout(form)
+
+        btn_cancel = QPushButton('Cancel')
+        btn_update = QPushButton('Update && Connect')
+        btn_cancel.setDefault(True)
+
+        btn_cancel.clicked.connect(self.reject)
+        btn_update.clicked.connect(self._accept_update)
+
+        btn_box = QDialogButtonBox()
+        btn_box.addButton(btn_cancel, QDialogButtonBox.ButtonRole.RejectRole)
+        btn_box.addButton(btn_update, QDialogButtonBox.ButtonRole.AcceptRole)
+        layout.addWidget(btn_box)
+
+    def _accept_update(self) -> None:
+        self._decision = 'update'
+        self.accept()
+
+    @property
+    def decision(self) -> str:
+        """'update' | 'reject'"""
+        return self._decision
