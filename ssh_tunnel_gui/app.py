@@ -1197,7 +1197,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ Profile CRUD
 
     def _add_tunnel(self) -> None:
-        dlg = TunnelConfigDialog(self)
+        available_parents = [n for n, c in self.profiles.items()
+                             if c.get('forward_type') == 'dynamic']
+        dlg = TunnelConfigDialog(self, available_parents=available_parents)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             r = dlg.result_dict
             name = r.get('name') or f'profile_{len(self.profiles)+1}'
@@ -1205,9 +1207,12 @@ class MainWindow(QMainWindow):
                 if QMessageBox.question(self, 'Overwrite',
                         f'Profile "{name}" already exists. Overwrite?') != QMessageBox.StandardButton.Yes:
                     return
-            r.setdefault('parent', None)
-            r.setdefault('start_order', len(self.profiles) + 1)
+            new_parent = r.get('parent')
+            siblings = [c for c in self.profiles.values() if c.get('parent') == new_parent]
+            r.setdefault('start_order', len(siblings) + 1)
             self.profiles[name] = r
+            if new_parent:
+                self._sync_child_proxy(name)
             self._save_profiles()
             self._repopulate_tree()
 
@@ -1216,12 +1221,21 @@ class MainWindow(QMainWindow):
         if cfg is None:
             return
         is_running = self._is_profile_running(prof_name)
+        current_parent = cfg.get('parent')
+        available_parents = [
+            n for n, c in self.profiles.items()
+            if c.get('forward_type') == 'dynamic'
+            and n != prof_name
+            and not self._is_ancestor(prof_name, n)
+        ]
         dlg = TunnelConfigDialog(self, initial=cfg.copy(), name=prof_name,
-                                 has_parent=bool(cfg.get('parent')),
+                                 parent_name=current_parent,
+                                 available_parents=available_parents,
                                  locked=is_running)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             r = dlg.result_dict
-            new_name = r.get('name') or prof_name
+            new_name   = r.get('name') or prof_name
+            new_parent = r.get('parent')
             if is_running:
                 # Only update safe fields — keep connection parameters untouched
                 cfg['auto_start']    = r['auto_start']
@@ -1233,14 +1247,20 @@ class MainWindow(QMainWindow):
                     self.profiles[new_name] = self.profiles.pop(prof_name)
                     self.manager.rename_instance(prof_name, new_name)
             else:
-                r.setdefault('parent', cfg.get('parent'))
-                r.setdefault('start_order', cfg.get('start_order', 999))
+                if new_parent != current_parent:
+                    siblings = [c for c in self.profiles.items()
+                                if c[1].get('parent') == new_parent and c[0] != prof_name]
+                    r['start_order'] = len(siblings) + 1
+                else:
+                    r.setdefault('start_order', cfg.get('start_order', 999))
                 if new_name != prof_name:
                     for c in self.profiles.values():
                         if c.get('parent') == prof_name:
                             c['parent'] = new_name
                     self.profiles.pop(prof_name, None)
                 self.profiles[new_name] = r
+                if new_parent:
+                    self._sync_child_proxy(new_name)
                 self._sync_all_child_proxies()
             self._save_profiles()
             self._repopulate_tree()

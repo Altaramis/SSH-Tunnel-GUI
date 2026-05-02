@@ -8,10 +8,10 @@ from typing import Any, Dict, List, Optional
 import paramiko
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QSpinBox,
-    QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
+    QSpinBox, QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from ssh_tunnel_gui.encryption import KEYRING_AVAILABLE
@@ -117,7 +117,8 @@ class TunnelConfigDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None,
                  initial: Optional[Dict[str, Any]] = None,
                  name: Optional[str] = None,
-                 has_parent: bool = False,
+                 parent_name: Optional[str] = None,
+                 available_parents: Optional[List[str]] = None,
                  locked: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle('Edit tunnel' if initial else 'Add tunnel')
@@ -213,23 +214,81 @@ class TunnelConfigDialog(QDialog):
         main_layout.addWidget(fwd_box)
 
         # ---- Proxy ----
-        proxy_box = QGroupBox('Proxy (optional)')
-        proxy_form = QFormLayout(proxy_box)
+        proxy_box = QGroupBox('Proxy')
+        proxy_main = QVBoxLayout(proxy_box)
+
+        self._proxy_enable = QCheckBox('Enable proxy')
+        proxy_main.addWidget(self._proxy_enable)
+
+        self._proxy_content = QWidget()
+        proxy_content_vbox = QVBoxLayout(self._proxy_content)
+        proxy_content_vbox.setContentsMargins(8, 4, 0, 0)
+        proxy_content_vbox.setSpacing(4)
+
+        # Build the list of selectable parents, always including the current one
+        parents_list = list(available_parents) if available_parents else []
+        if parent_name and parent_name not in parents_list:
+            parents_list.insert(0, parent_name)
+
+        # Radio: use existing tunnel
+        tunnel_row = QWidget()
+        tunnel_hl = QHBoxLayout(tunnel_row)
+        tunnel_hl.setContentsMargins(0, 0, 0, 0)
+        self._rb_use_tunnel = QRadioButton('Use existing tunnel:')
+        self._tunnel_combo  = QComboBox()
+        if parents_list:
+            self._tunnel_combo.addItems(parents_list)
+        else:
+            self._rb_use_tunnel.setEnabled(False)
+            self._tunnel_combo.setEnabled(False)
+            self._tunnel_combo.addItem('(no Dynamic tunnel available)')
+        tunnel_hl.addWidget(self._rb_use_tunnel)
+        tunnel_hl.addWidget(self._tunnel_combo, 1)
+        proxy_content_vbox.addWidget(tunnel_row)
+
+        # Radio: manual
+        self._rb_manual = QRadioButton('Manual configuration')
+        proxy_content_vbox.addWidget(self._rb_manual)
+
+        # Enforce mutual exclusivity (buttons live in different parent widgets)
+        self._proxy_src_group = QButtonGroup(self)
+        self._proxy_src_group.addButton(self._rb_use_tunnel)
+        self._proxy_src_group.addButton(self._rb_manual)
+
+        # Manual fields
+        self._manual_widget = QWidget()
+        manual_form = QFormLayout(self._manual_widget)
+        manual_form.setContentsMargins(16, 4, 0, 0)
         self._proxy_type = QComboBox()
         self._proxy_type.addItems(self._PROXY_TYPES)
         self._proxy_host = QLineEdit()
-        self._proxy_port = QSpinBox(); self._proxy_port.setRange(1, 65535); self._proxy_port.setValue(1080)
+        self._proxy_port = QSpinBox()
+        self._proxy_port.setRange(1, 65535)
+        self._proxy_port.setValue(1080)
         self._proxy_user = QLineEdit()
-        self._proxy_pass = QLineEdit(); self._proxy_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        proxy_form.addRow('Type:', self._proxy_type)
-        proxy_form.addRow('Host:', self._proxy_host)
-        proxy_form.addRow('Port:', self._proxy_port)
-        proxy_form.addRow('Username:', self._proxy_user)
-        proxy_form.addRow('Password:', self._proxy_pass)
-        if has_parent:
-            proxy_box.setEnabled(False)
-            proxy_box.setTitle('Proxy (inherited from parent)')
+        self._proxy_pass = QLineEdit()
+        self._proxy_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        manual_form.addRow('Type:',     self._proxy_type)
+        manual_form.addRow('Host:',     self._proxy_host)
+        manual_form.addRow('Port:',     self._proxy_port)
+        manual_form.addRow('Username:', self._proxy_user)
+        manual_form.addRow('Password:', self._proxy_pass)
+        proxy_content_vbox.addWidget(self._manual_widget)
+
+        proxy_main.addWidget(self._proxy_content)
         main_layout.addWidget(proxy_box)
+
+        # Connect proxy signals
+        self._proxy_enable.stateChanged.connect(self._on_proxy_enable_changed)
+        self._rb_manual.toggled.connect(self._on_proxy_source_changed)
+
+        # Initial state: hidden until a radio is selected
+        self._proxy_content.setVisible(False)
+        self._manual_widget.setVisible(False)
+        if parents_list:
+            self._rb_use_tunnel.setChecked(True)
+        else:
+            self._rb_manual.setChecked(True)
 
         # ---- Connection options ----
         opt_box = QGroupBox('Connection options')
@@ -247,6 +306,7 @@ class TunnelConfigDialog(QDialog):
                                 QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self._accept)
         btns.rejected.connect(self.reject)
+        main_layout.addStretch(1)
         main_layout.addWidget(btns)
 
         self._on_type_changed()  # Set initial visibility
@@ -275,15 +335,25 @@ class TunnelConfigDialog(QDialog):
             self._dest_host.setText(initial.get('remote_host', ''))
             if initial.get('remote_port'):
                 self._dest_port.setValue(int(initial['remote_port']))
-            proxy = initial.get('proxy')
-            if proxy:
-                ptype = proxy.get('proxy_type', 'socks5').lower()
-                idx = self._PROXY_TYPES.index(ptype) if ptype in self._PROXY_TYPES else 0
-                self._proxy_type.setCurrentIndex(idx)
-                self._proxy_host.setText(proxy.get('addr', ''))
-                self._proxy_port.setValue(int(proxy.get('port', 1080)))
-                self._proxy_user.setText(proxy.get('username', ''))
-                self._proxy_pass.setText(proxy.get('password', ''))
+            if parent_name:
+                # Pre-select the current parent in the tunnel combo
+                idx = self._tunnel_combo.findText(parent_name)
+                if idx >= 0:
+                    self._tunnel_combo.setCurrentIndex(idx)
+                self._rb_use_tunnel.setChecked(True)
+                self._proxy_enable.setChecked(True)
+            else:
+                proxy = initial.get('proxy')
+                if proxy and proxy.get('addr'):
+                    ptype = proxy.get('proxy_type', 'socks5').lower()
+                    pidx = self._PROXY_TYPES.index(ptype) if ptype in self._PROXY_TYPES else 0
+                    self._proxy_type.setCurrentIndex(pidx)
+                    self._proxy_host.setText(proxy.get('addr', ''))
+                    self._proxy_port.setValue(int(proxy.get('port', 1080)))
+                    self._proxy_user.setText(proxy.get('username', ''))
+                    self._proxy_pass.setText(proxy.get('password', ''))
+                    self._rb_manual.setChecked(True)
+                    self._proxy_enable.setChecked(True)
             self._keepalive.setValue(initial.get('keepalive_interval', 30))
             self._auto_reconnect.setChecked(initial.get('auto_reconnect', True))
         elif hasattr(parent, 'profiles'):
@@ -307,6 +377,14 @@ class TunnelConfigDialog(QDialog):
         except Exception as exc:
             self._verify_lbl.setText(f'✗ {exc}')
             self._verify_lbl.setStyleSheet('color: red;')
+
+    def _on_proxy_enable_changed(self) -> None:
+        self._proxy_content.setVisible(self._proxy_enable.isChecked())
+
+    def _on_proxy_source_changed(self) -> None:
+        manual = self._rb_manual.isChecked()
+        self._manual_widget.setVisible(manual)
+        self._tunnel_combo.setEnabled(not manual and self._rb_use_tunnel.isEnabled())
 
     def _on_type_changed(self) -> None:
         show = self._rb_local.isChecked() or self._rb_remote.isChecked()
@@ -335,17 +413,21 @@ class TunnelConfigDialog(QDialog):
         if self._rb_local.isChecked():    ft = 'local'
         elif self._rb_remote.isChecked(): ft = 'remote'
         else:                             ft = 'dynamic'
-        proxy_host = self._proxy_host.text().strip()
-        if not self._proxy_host.isEnabled() or not proxy_host:
-            proxy: Optional[Dict[str, Any]] = None
-        else:
-            proxy = {
-                'proxy_type': self._proxy_type.currentText(),
-                'addr':       proxy_host,
-                'port':       self._proxy_port.value(),
-                'username':   self._proxy_user.text().strip() or None,
-                'password':   self._proxy_pass.text() or None,
-            }
+        proxy: Optional[Dict[str, Any]] = None
+        new_parent: Optional[str] = None
+        if self._proxy_enable.isChecked():
+            if self._rb_use_tunnel.isChecked() and self._rb_use_tunnel.isEnabled():
+                new_parent = self._tunnel_combo.currentText() or None
+            else:
+                proxy_host = self._proxy_host.text().strip()
+                if proxy_host:
+                    proxy = {
+                        'proxy_type': self._proxy_type.currentText(),
+                        'addr':       proxy_host,
+                        'port':       self._proxy_port.value(),
+                        'username':   self._proxy_user.text().strip() or None,
+                        'password':   self._proxy_pass.text() or None,
+                    }
         return {
             'name':               self._name.text().strip(),
             'auto_start':         self._auto_start.isChecked(),
@@ -362,6 +444,7 @@ class TunnelConfigDialog(QDialog):
             'remote_host':        self._dest_host.text().strip(),
             'remote_port':        self._dest_port.value(),
             'proxy':              proxy,
+            'parent':             new_parent,
             'keepalive_interval': self._keepalive.value(),
             'auto_reconnect':     self._auto_reconnect.isChecked(),
         }
