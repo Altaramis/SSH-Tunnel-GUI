@@ -1,17 +1,23 @@
 # Copyright (C) 2026  Altaramis
 # SPDX-License-Identifier: GPL-3.0-or-later
+import argparse
 import os
 import sys
 from PyQt6.QtGui import QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from ssh_tunnel_gui.app import MainWindow
+from ssh_tunnel_gui._version import __version__
 
 _LOGO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logo.ico')
 _IPC_NAME = 'ssh_tunnel_gui_instance'
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(prog='ssh_tunnel_gui', add_help=False)
+    parser.add_argument('--version', action='version', version=f'SSH Tunnel GUI {__version__}')
+    parser.parse_known_args()
+
     app = QApplication(sys.argv)
     app.setApplicationName('SSH Tunnel GUI')
     icon = QIcon(_LOGO)
